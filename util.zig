@@ -35,7 +35,7 @@ pub fn Child(comptime Vec: type) type {
     };
 }
 
-pub fn len(comptime Vec: type) comptime_int {
+pub fn vlen(comptime Vec: type) comptime_int {
     return switch(comptime @typeInfo(AsVec(Vec))) {
         .Array => |i| i.len,
         .Vector => |i| i.len,
@@ -44,7 +44,7 @@ pub fn len(comptime Vec: type) comptime_int {
 }
 
 pub fn Mask(comptime Vec: type) type {
-    return std.meta.Int(.unsigned, len(AsVec(Vec)));
+    return std.meta.Int(.unsigned, vlen(AsVec(Vec)));
 }
 
 pub fn UInt(comptime b: u16) type {
@@ -85,23 +85,31 @@ pub fn lowInt(integer: anytype) NarrowInt(2, @TypeOf(integer)) {
 pub fn high(v: anytype) T: {
     const T = AsVec(@TypeOf(v));
     const E = Child(T);
-    break :T @Vector(len(T), NarrowInt(2, E));
+    break :T @Vector(vlen(T), NarrowInt(2, E));
 } {
     const T = AsVec(@TypeOf(v));
     const E = Child(T);
-    const R = @Vector(len(T), NarrowInt(2, E));
+    const R = @Vector(vlen(T), NarrowInt(2, E));
 
-    return @intCast(R, asVec(v) >> splat(len(T), std.math.Log2Int(E), @divExact(bits(E), 2)));
+    return @intCast(R, asVec(v) >> splat(vlen(T), std.math.Log2Int(E), @divExact(bits(E), 2)));
 }
 
 pub fn low(v: anytype) T: {
     const T = AsVec(@TypeOf(v));
     const E = Child(T);
-    break :T @Vector(len(T), NarrowInt(2, E));
+    break :T @Vector(vlen(T), NarrowInt(2, E));
 } {
     const T = AsVec(@TypeOf(v));
     const E = Child(T);
-    const R = @Vector(len(T), NarrowInt(2, E));
+    const R = @Vector(vlen(T), NarrowInt(2, E));
 
-    return @intCast(R, asVec(v) & splat(len(T), E, std.math.maxInt(NarrowInt(2, E))));
+    return @intCast(R, asVec(v) & splat(vlen(T), E, std.math.maxInt(NarrowInt(2, E))));
+}
+
+pub fn Index(comptime len: u16) type {
+    return std.math.Log2Int(std.meta.Int(.unsigned, len));
+}
+
+pub fn Count(comptime len: u16) type {
+    return std.math.Log2Int(std.meta.Int(.unsigned, len + 1));
 }

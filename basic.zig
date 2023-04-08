@@ -3,18 +3,14 @@ const simd = std.simd;
 const meta = std.meta;
 
 const util = @import("util.zig");
-const vlen = util.len;
-const Mask = util.Mask;
-const Child = util.Child;
-const asVec  = util.asVec;
-const AsVec  = util.AsVec;
 const splat = util.splat;
 const WideInt = util.WideInt;
 const NarrowInt = util.NarrowInt;
 const high = util.high;
 const low = util.low;
-const Resolve = util.Resolve;
 const UInt = util.UInt;
+const Index = util.Index;
+const Count = util.Count;
 
 pub const BinaryOp = enum {
     Add,
@@ -67,11 +63,19 @@ pub const BinaryOp = enum {
 pub const UnaryOp = enum {
     Not,
     Square,
+    Neg,
+    Floor,
+    Ceil,
+    Round,
 
     fn perform(op: UnaryOp, a: anytype) @TypeOf(a) {
         return switch(op) {
             .Not => if(comptime @TypeOf(a) == bool) !a else ~a,
             .Square => a*a,
+            .Neg => -a,
+            .Floor => @floor(a),
+            .Ceil => @ceil(a),
+            .Round => @round(a),
         };
     }
 
@@ -85,12 +89,9 @@ pub inline fn horizontalOp(
     comptime E: type,
     v: @Vector(len, E),
 ) @Vector(@divExact(len, nb_elements), E) {
-
     const deinterlaced = simd.deinterlace(nb_elements, v);
-    const D = @TypeOf(deinterlaced[0]);
 
-    var accumulator: D = deinterlaced[0];
-
+    var accumulator = deinterlaced[0];
     inline for(deinterlaced[1..]) |e|
         accumulator = op.perform(accumulator, e);
 
@@ -202,6 +203,64 @@ pub inline fn addsub(comptime len: u16, comptime E: type, a: @Vector(len, E), b:
     return simd.interlace(.{de_a[0] -% de_b[0], de_a[1] +% de_b[1]});
 }
 
+pub fn MinWithPos(comptime len: u16, comptime E: type) type {
+    return struct{min: E, pos: Index(len)};
+}
+
+/// Return the minimum element in a and its position.
+/// Related instructions: phminposuw
+pub inline fn minWithPos(comptime len: u16, comptime E: type, a: @Vector(len, E)) MinWithPos(len, E) {
+    var prev_min: E = switch(comptime @typeInfo(E)) {.Int => std.math.maxInt(E), .Float =>std.math.inf(E), else => @compileError("stub")};
+    var prev_idx: Index(len) = undefined;
+    for(&@as([len]E, a), 0..) |e, i| {
+        if(e < prev_min) {
+            prev_min = e;
+            prev_idx = @intCast(Index(len), i);
+        }
+    }
+    return .{.pos = prev_idx, .min = prev_min};
+}
+
+/// Return the elements from src as indexed by indices.
+/// Related instructions: vgather*
+pub inline fn gather(
+    comptime len: u16,
+    comptime I: type,
+    indices: @Vector(len, I),
+    comptime E: type,
+    src: [*]const E,
+    comptime scale: comptime_int
+) @Vector(len, E) {
+    var ret: @Vector(len, E) = undefined;
+    for(0..len) |i| ret[i] = src[indices[i] * scale];
+    return ret;
+}
+
+/// Store the elements in dst as indexed by indices.
+/// Related instructions: vscatter*
+pub inline fn scatter(
+    comptime len: u16,
+    comptime I: type,
+    indices: @Vector(len, I),
+    comptime E: type,
+    src: @Vector(len, E),
+    dst: [*]E,
+    comptime scale: comptime_int
+) void {
+    for(0..len) |i| dst[indices[i] * scale] = src[i];
+}
+
+// TODO: interface to mpsadbw
+
+// XXX: hadd? dup? string stuff? crc? mulhrs?
+// XXX: The boring stuff with horizontal addition
+// XXX: Masked
+// XXX: Other AVX stuff
+// XXX: AVX-512
+// XXX: ARM
+// XXX: RISC-V
+// XXX: WASM
+
 // Tests
 
 test "horizontalOp" {
@@ -287,5 +346,36 @@ test "addsub" {
     const b = .{3, 3, 1, 3};
     const expected = @Vector(4, u3){6, 6, 2, 2};
     const actual = addsub(4, u3, a, b);
+    try std.testing.expectEqual(expected, actual);
+}
+
+test "minWithPos" {
+    const a = .{1, 3, 3, 7, 0};
+    const expected: MinWithPos(5, u3) = .{.min = 0, .pos = 4};
+    const actual = @as(@TypeOf(expected), minWithPos(5, u3, a));
+    try std.testing.expectEqual(expected, actual);
+}
+
+test "gather" {
+    const indices = @Vector(8, Index(8)){0, 2, 4, 6, 1, 3, 5, 7};
+    const src = [_]u8{255, 255, 3, 7, 4, 2, 0, 6};
+    const scale = 1;
+
+    const expected = @Vector(8, u8){255, 3, 4, 0, 255, 7, 2, 6};
+    const actual = gather(8, Index(8), indices, u8, @as([*]const u8, &src), scale);
+
+    try std.testing.expectEqual(expected, actual);
+}
+
+test "scatter" {
+    const indices = @Vector(8, Index(8)){0, 2, 4, 6, 1, 3, 5, 7};
+    const src = @Vector(8, u8){255, 3, 4, 0, 255, 7, 2, 6};
+    const scale = 1;
+
+    const expected = [8]u8{255, 255, 3, 7, 4, 2, 0, 6};
+    var actual: [8]u8 = undefined;
+
+    scatter(8, Index(8), indices, u8, src, @as([*]u8, &actual), scale);
+
     try std.testing.expectEqual(expected, actual);
 }
